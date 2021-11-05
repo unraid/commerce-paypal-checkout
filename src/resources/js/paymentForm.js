@@ -1,74 +1,86 @@
-function findClosestParent (startElement, fn) {
-    var parent = startElement.parentElement;
+const findClosestParent = (startElement, fn) => {
+    const parent = startElement.parentElement;
     if (!parent) return undefined;
     return fn(parent) ? parent : findClosestParent(parent, fn);
-}
+};
 
-function initPaypalCheckout() {
+const initPaypalCheckout = () => {
+    console.debug('[💖 initPaypalCheckout 💖]');
     if (typeof paypal_checkout_sdk === "undefined") {
         setTimeout(initPaypalCheckout, 200);
     } else {
-        var $wrapper = document.querySelector('.paypal-rest-form');
-        var $form = findClosestParent($wrapper, function(element) {
-            return element.tagName === 'FORM';
+        const $wrapper = document.querySelector('.paypal-rest-form');
+        const $form = findClosestParent($wrapper, function(element) {
+          return element.tagName === 'FORM';
         });
-        var paymentUrl = $wrapper.dataset.prepare;
-        var completeUrl = $wrapper.dataset.complete;
-        var transactionHash;
-        var errorShown = false;
+        const paymentUrl = $wrapper.dataset.prepare;
+        const completeUrl = $wrapper.dataset.complete;
+        let transactionHash;
+        let errorShown = false;
+
+        console.debug('[💖 initPaypalCheckout 💖]', {
+            $wrapper,
+            $form,
+            paymentUrl,
+            completeUrl,
+            transactionHash,
+            errorShown,
+        });
 
         paypal_checkout_sdk.Buttons({
-            createOrder: function(data, actions) {
-                var form = new FormData($form);
-
+            createOrder: (data, actions) => {
+                const form = new FormData($form);
+                console.debug('[💖 createOrder 💖]', {
+                    form
+                });
                 return fetch(paymentUrl, {
                     method: 'post',
                     body: form,
                     headers: {
                         'Accept': 'application/json'
                     }
-                }).then(function(res) {
+                }).then((res) => {
+                    console.debug('[💖 createOrder.then 💖]', { res });
                     return res.json();
-                }).then(function(data) {
+                }).then((data) => {
+                    console.debug('[💖 createOrder.then 💖]', { data });
                     if (data.error) {
-                        var errorMessage = '';
-                        
-                        try {
-                            // Handle PayPal errors
-                            var error = JSON.parse(data.error);
-                            if (error.details && error.details.length) {
-                                errorMessage = error.details[0].description;
-                            }
-                        } catch (e) {
-                            // Handle Commerce errors
+                        let errorMessage = '';
+                        try { // Handle PayPal errors
+                            const error = JSON.parse(data.error);
+                            if (error.details && error.details.length) errorMessage = error.details[0].description;
+                        } catch (e) { // Handle Commerce errors
                             errorMessage = data.error;
                         }
-                            
+
                         throw Error(errorMessage);
                     }
                     transactionHash = data.transactionHash;
                     return data.transactionId; // Use the same key name for order ID on the client and server
-                }).catch(function(error) {
+                }).catch((error) => {
+                    console.error('[😭 createOrder.catch 😭]', error);
                     errorShown = true;
                     alert(error);
                 });
             },
-            onError: function(err) {
+            onError: (err) => {
+                console.error('[😭 onError 😭]', { err });
                 $form.dataset.processing = false;
                 if (!errorShown) {
                     alert(err);
                 }
             },
-            onApprove: function(data, actions) {
-                var separator = '?';
+            onApprove: (data, actions) => {
+                let separator = '?';
                 if (completeUrl.indexOf('?') >= 0) {
                     separator = '&';
                 }
-
+                console.debug('[💖 onApprove 💖]', { data });
+                togglePaymentLoader('paypal');
                 window.location = completeUrl + separator + 'commerceTransactionHash=' + transactionHash;
             }
         }).render('#paypal-button-container');
     }
-}
+};
 
 initPaypalCheckout();
