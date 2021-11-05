@@ -5,7 +5,7 @@ const findClosestParent = (startElement, fn) => {
 };
 
 const initPaypalCheckout = () => {
-    console.debug('[💖 initPaypalCheckout 💖]');
+    // console.debug('[💖 initPaypalCheckout 💖]');
     if (typeof paypal_checkout_sdk === "undefined") {
         setTimeout(initPaypalCheckout, 200);
     } else {
@@ -18,21 +18,21 @@ const initPaypalCheckout = () => {
         let transactionHash;
         let errorShown = false;
 
-        console.debug('[💖 initPaypalCheckout 💖]', {
-            $wrapper,
-            $form,
-            paymentUrl,
-            completeUrl,
-            transactionHash,
-            errorShown,
-        });
+        // console.debug('[💖 initPaypalCheckout 💖]', {
+        //     $wrapper,
+        //     $form,
+        //     paymentUrl,
+        //     completeUrl,
+        //     transactionHash,
+        //     errorShown,
+        // });
 
         paypal_checkout_sdk.Buttons({
             createOrder: (data, actions) => {
                 const form = new FormData($form);
-                console.debug('[💖 createOrder 💖]', {
-                    form
-                });
+                // console.debug('[💖 createOrder 💖]', {
+                //     form
+                // });
                 return fetch(paymentUrl, {
                     method: 'post',
                     body: form,
@@ -40,10 +40,10 @@ const initPaypalCheckout = () => {
                         'Accept': 'application/json'
                     }
                 }).then((res) => {
-                    console.debug('[💖 createOrder.then 💖]', { res });
+                    // console.debug('[💖 createOrder.then 💖]', { res });
                     return res.json();
                 }).then((data) => {
-                    console.debug('[💖 createOrder.then 💖]', { data });
+                    // console.debug('[💖 createOrder.then 💖]', { data });
                     if (data.error) {
                         let errorMessage = '';
                         try { // Handle PayPal errors
@@ -75,8 +75,8 @@ const initPaypalCheckout = () => {
                 if (completeUrl.indexOf('?') >= 0) {
                     separator = '&';
                 }
-                console.debug('[💖 onApprove 💖]', { data });
-                togglePaymentLoader('paypal');
+                // console.debug('[💖 onApprove 💖]', { data });
+                togglePaymentLoader();
                 window.location = completeUrl + separator + 'commerceTransactionHash=' + transactionHash;
             }
         }).render('#paypal-button-container');
