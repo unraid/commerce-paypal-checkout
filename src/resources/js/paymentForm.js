@@ -75,6 +75,10 @@ const initPaypalCheckout = () => {
                 }
                 // console.debug('[💖 onApprove 💖]', { data });
                 togglePaymentLoader();
+
+                /* tag manager data layer */
+                onCheckout('paypal');
+
                 window.location = completeUrl + separator + 'commerceTransactionHash=' + transactionHash;
             }
         }).render('#paypal-button-container');
