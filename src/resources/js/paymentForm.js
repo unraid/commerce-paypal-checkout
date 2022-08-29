@@ -64,7 +64,13 @@ function initPaypalCheckout() {
         if (completeUrl.indexOf('?') >= 0) {
           separator = '&';
         }
-        
+        /**
+         * UNRAID SPECIFIC ADDITION - START
+         */
+        togglePaymentLoader();
+        /**
+         * UNRAID SPECIFIC ADDITION - END
+         */
         window.location = completeUrl + separator + 'commerceTransactionHash=' + transactionHash;
       }
     }).render('#paypal-button-container');
