@@ -19,6 +19,7 @@ use craft\commerce\models\payments\BasePaymentForm;
 use craft\commerce\models\payments\OffsitePaymentForm;
 use craft\commerce\models\PaymentSource;
 use craft\commerce\models\Transaction;
+use craft\commerce\paypalcheckout\injectors\PayPalAuthorizationInjector;
 use craft\commerce\paypalcheckout\PayPalCheckoutBundle;
 use craft\commerce\paypalcheckout\responses\CheckoutResponse;
 use craft\commerce\paypalcheckout\responses\RefundResponse;
@@ -29,20 +30,24 @@ use craft\helpers\StringHelper;
 use craft\helpers\UrlHelper;
 use craft\web\Response as WebResponse;
 use craft\web\View;
+use PayPalCheckoutSdk\Core\AuthorizationInjector;
 use PayPalCheckoutSdk\Core\PayPalHttpClient;
-use PayPalCheckoutSdk\Core\SandboxEnvironment;
 use PayPalCheckoutSdk\Core\ProductionEnvironment;
+use PayPalCheckoutSdk\Core\SandboxEnvironment;
 use PayPalCheckoutSdk\Orders\OrdersAuthorizeRequest;
 use PayPalCheckoutSdk\Orders\OrdersCaptureRequest;
+use PayPalCheckoutSdk\Orders\OrdersCreateRequest;
 use PayPalCheckoutSdk\Payments\AuthorizationsCaptureRequest;
 use PayPalCheckoutSdk\Payments\CapturesRefundRequest;
+use PayPalHttp\HttpException;
+use PayPalHttp\HttpResponse;
+use PayPalHttp\IOException;
 use Throwable;
 use Twig\Error\LoaderError;
 use Twig\Error\RuntimeError;
 use Twig\Error\SyntaxError;
 use yii\base\Exception;
 use yii\base\InvalidConfigException;
-use PayPalCheckoutSdk\Orders\OrdersCreateRequest;
 
 /**
  * This class represents the PayPal Checkout gateway
@@ -59,7 +64,7 @@ class Gateway extends BaseGateway
 {
     const PAYMENT_TYPES = [
         'authorize' => 'AUTHORIZE',
-        'purchase' => 'CAPTURE'
+        'purchase' => 'CAPTURE',
     ];
 
     /**
@@ -293,7 +298,8 @@ class Gateway extends BaseGateway
     }
 
     /**
-     * @inheritdoc
+     * @param HttpResponse $data
+     * @return RequestResponseInterface
      */
     public function getResponseModel($data): RequestResponseInterface
     {
@@ -301,7 +307,7 @@ class Gateway extends BaseGateway
     }
 
     /**
-     * @param $data
+     * @param HttpResponse|array $data
      * @return RefundResponse
      */
     public function getRefundResponseModel($data): RefundResponse
@@ -399,12 +405,12 @@ class Gateway extends BaseGateway
 
         try {
             $data = $client->execute($request);
-        } catch (\Exception $e) {
+        } catch (HttpException|IOException $e) {
             $message = $e->getMessage();
             $message = Json::isJsonObject($message) ? Json::decode($message) : $message;
 
             $data = (object)[
-                'statusCode' => $e->statusCode ?? 400,
+                'statusCode' => $e instanceof HttpException ? $e->statusCode : 400,
                 'result' => (object)[
                     'id' => $transaction->reference,
                     'message' => is_array($message) && isset($message['message']) ? $message['message'] : $message,
@@ -488,7 +494,18 @@ class Gateway extends BaseGateway
             $environment = new SandboxEnvironment($this->getClientId(), $this->getSecret());
         }
 
-        return new PayPalHttpClient($environment);
+        $httpClient = new PayPalHttpClient($environment);
+
+        foreach ($httpClient->injectors as &$injector) {
+            if (!$injector instanceof AuthorizationInjector) {
+                continue;
+            }
+
+            // Replace the core authorization injector
+            $injector = new PayPalAuthorizationInjector($httpClient, $environment);
+        }
+
+        return $httpClient;
     }
 
     /**
@@ -511,7 +528,7 @@ class Gateway extends BaseGateway
         $body = [
             'amount' => [
                 'value' => (string)$amountValue,
-                'currency_code' => $transaction->paymentCurrency
+                'currency_code' => $transaction->paymentCurrency,
             ],
         ];
 
@@ -532,11 +549,8 @@ class Gateway extends BaseGateway
         try {
             $apiResponse = $client->execute($request);
             return $this->getRefundResponseModel($apiResponse);
-        } catch (\Exception $e) {
-
-            return $this->getRefundResponseModel([
-                'message' => $e->getMessage()
-            ]);
+        } catch (HttpException|IOException $e) {
+            return $this->getRefundResponseModel(new HttpResponse(0, Json::decodeIfJson($e->getMessage()), []));
         }
     }
 
@@ -679,7 +693,7 @@ class Gateway extends BaseGateway
             'shipping_preference' => $shippingPreference,
             'user_action' => 'PAY_NOW',
             'return_url' => UrlHelper::siteUrl($order->returnUrl),
-            'cancel_url' => UrlHelper::siteUrl($order->cancelUrl)
+            'cancel_url' => UrlHelper::siteUrl($order->cancelUrl),
         ];
 
         return $requestData;
@@ -712,7 +726,7 @@ class Gateway extends BaseGateway
         }
 
         return [
-            $purchaseUnits
+            $purchaseUnits,
         ];
     }
 
@@ -777,8 +791,8 @@ class Gateway extends BaseGateway
         $lineItems = [];
         foreach ($order->getLineItems() as $lineItem) {
             $lineItems[] = [
-                'name' => StringHelper::truncate($lineItem->description, 127, ''), // required
-                'sku' => StringHelper::truncate($lineItem->sku, 127, ''),
+                'name' => StringHelper::truncate($lineItem->getDescription(), 127, ''), // required
+                'sku' => StringHelper::truncate($lineItem->getSku(), 127, ''),
                 'unit_amount' => [
                     'currency_code' => $order->paymentCurrency,
                     'value' => (string)Currency::round($lineItem->onSale ? $lineItem->salePrice : $lineItem->price),
@@ -796,18 +810,24 @@ class Gateway extends BaseGateway
      */
     private function _buildShipping(Order $order): array
     {
-        /** @var ShippingMethod $shippingMethod */
+        /** @var ShippingMethod|null $shippingMethod */
         $shippingMethod = $order->getShippingMethod();
-        /** @var Address $shippingAddress */
-        $shippingAddress = $order->shippingAddress;
+        /** @var Address|null $shippingAddress */
+        $shippingAddress = $order->getShippingAddress();
 
         $return = [];
 
-        if ($shippingAddress && $shippingAddress->country) {
+        if ($shippingAddress && $shippingAddress->getCountry()) {
             $return['address'] = $this->_buildAddressArray($shippingAddress);
 
-            $name = $shippingAddress->fullName ?: $shippingAddress->firstName . ' ' . $shippingAddress->lastName;
-            if ($name) {
+            /** @var string|null $fullName */
+            $fullName = $shippingAddress->fullName;
+            /** @var string|null $firstName */
+            $firstName = $shippingAddress->firstName;
+            /** @var string|null $lastName */
+            $lastName = $shippingAddress->lastName;
+            $name = $fullName ?: $firstName . ' ' . $lastName;
+            if (trim($name)) {
                 $return['name'] = ['full_name' => StringHelper::truncate($name, 300, '')];
             }
         }
@@ -829,7 +849,7 @@ class Gateway extends BaseGateway
      */
     private function _buildPayer(Order $order): ?array
     {
-        /** @var Address $billingAddress */
+        /** @var Address|null $billingAddress */
         $billingAddress = $order->billingAddress;
 
         if (!$billingAddress && !$order->email) {
@@ -858,7 +878,7 @@ class Gateway extends BaseGateway
         }
 
         // To meet PayPal's requirements, the country must exist on the address
-        if ($billingAddress->country) {
+        if ($billingAddress->getCountry()) {
             $return['address'] = $this->_buildAddressArray($billingAddress);
         }
 
